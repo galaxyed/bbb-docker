@@ -1,0 +1,407 @@
+#!/bin/bash
+
+set -e
+cd "$(dirname "$0")/.."
+
+# Function to show usage
+show_usage() {
+    echo "Usage: $0 [OPTIONS]"
+    echo ""
+    echo "Options:"
+    echo "  --domain DOMAIN                    Domain name (required)"
+    echo "  --greenlight [y|n]                Include greenlight (default: n)"
+    echo "  --https-proxy [y|n]               Include automatic HTTPS proxy (default: n)"
+    echo "  --letsencrypt-email EMAIL         Email for Let's Encrypt notifications (required if https-proxy=y)"
+    echo "  --recording [y|n]                 Include recording feature (default: n)"
+    echo "  --remove-old-recording [y|n]      Remove old recordings (default: n, only if recording=y)"
+    echo "  --recording-max-age-days DAYS     Max age in days for recordings (required if remove-old-recording=y)"
+    echo "  --prometheus-exporter [y|n]       Include Prometheus exporter (default: n)"
+    echo "  --prometheus-optimization [y|n]   Enable Prometheus optimization (default: n, only if prometheus-exporter=y)"
+    echo "  --external-ipv4 IP                External IPv4 address (auto-detected if not provided)"
+    echo "  --external-ipv6 IP                External IPv6 address (auto-detected if not provided)"
+    echo "  --force                           Overwrite existing .env file if it exists"
+    echo "  --interactive                     Run in interactive mode (ignore other options)"
+    echo "  --help                            Show this help message"
+    echo ""
+    echo "Example:"
+    echo "  $0 --domain example.com --greenlight y --https-proxy y --letsencrypt-email admin@example.com"
+}
+
+# Parse command line arguments
+INTERACTIVE_MODE=false
+FORCE_OVERWRITE=false
+DOMAIN=""
+GREENLIGHT=""
+HTTPS_PROXY=""
+LETSENCRYPT_EMAIL=""
+RECORDING=""
+REMOVE_OLD_RECORDING=""
+RECORDING_MAX_AGE_DAYS=""
+PROMETHEUS_EXPORTER=""
+PROMETHEUS_EXPORTER_OPTIMIZATION=""
+EXTERNAL_IPv4_ARG=""
+EXTERNAL_IPv6_ARG=""
+
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        --domain)
+            DOMAIN="$2"
+            shift 2
+            ;;
+        --greenlight)
+            GREENLIGHT="$2"
+            shift 2
+            ;;
+        --https-proxy)
+            HTTPS_PROXY="$2"
+            shift 2
+            ;;
+        --letsencrypt-email)
+            LETSENCRYPT_EMAIL="$2"
+            shift 2
+            ;;
+        --recording)
+            RECORDING="$2"
+            shift 2
+            ;;
+        --remove-old-recording)
+            REMOVE_OLD_RECORDING="$2"
+            shift 2
+            ;;
+        --recording-max-age-days)
+            RECORDING_MAX_AGE_DAYS="$2"
+            shift 2
+            ;;
+        --prometheus-exporter)
+            PROMETHEUS_EXPORTER="$2"
+            shift 2
+            ;;
+        --prometheus-optimization)
+            PROMETHEUS_EXPORTER_OPTIMIZATION="$2"
+            shift 2
+            ;;
+        --external-ipv4)
+            EXTERNAL_IPv4_ARG="$2"
+            shift 2
+            ;;
+        --external-ipv6)
+            EXTERNAL_IPv6_ARG="$2"
+            shift 2
+            ;;
+        --force)
+            FORCE_OVERWRITE=true
+            shift
+            ;;
+        --interactive)
+            INTERACTIVE_MODE=true
+            shift
+            ;;
+        --help)
+            show_usage
+            exit 0
+            ;;
+        *)
+            echo "Unknown option: $1"
+            show_usage
+            exit 1
+            ;;
+    esac
+done
+
+if ! [ -x "$(command -v curl)" ]; then
+  echo "Error: curl is not installed, but the setup script relies on it."
+  echo "on debian based operating systems try following command:"
+  echo "  $ sudo apt-get install curl"
+  exit 1
+fi
+
+# Check .env file
+if [ -f .env ]; then
+    if [ "$FORCE_OVERWRITE" = true ]; then
+        echo "Warning: Overwriting existing .env file..."
+        rm .env
+    elif [ "$INTERACTIVE_MODE" = true ]; then
+        overwrite=""
+        while [[ ! $overwrite =~ ^(y|n)$ ]]; do
+            read -p "Configuration file .env already exists. Overwrite? (y/n): " overwrite
+        done
+        if [ "$overwrite" = "n" ]; then
+            echo "Setup cancelled. Either edit variables manually in .env or use --force to overwrite."
+            exit 1
+        else
+            rm .env
+        fi
+    else
+        echo "Error: the configuration file .env already exists."
+        echo "Use --force to overwrite, --interactive for prompt, or remove the file manually"
+        exit 1
+    fi
+fi
+
+. scripts/functions.sh
+ensure_bbbhtml5yml
+
+# Get external IPs
+if [ -n "$EXTERNAL_IPv4_ARG" ]; then
+    EXTERNAL_IPv4="$EXTERNAL_IPv4_ARG"
+else
+    EXTERNAL_IPv4=$(curl -4 -s https://icanhazip.com)
+fi
+
+if [ -n "$EXTERNAL_IPv6_ARG" ]; then
+    EXTERNAL_IPv6="$EXTERNAL_IPv6_ARG"
+else
+    EXTERNAL_IPv6=$(curl -6 -s -m 10 https://icanhazip.com || true)
+fi
+
+# Function to validate inputs
+validate_inputs() {
+    # Validate required parameters in non-interactive mode
+    if [ "$INTERACTIVE_MODE" = false ]; then
+        if [ -z "$DOMAIN" ]; then
+            echo "Error: --domain is required in non-interactive mode"
+            show_usage
+            exit 1
+        fi
+
+        if [ "$HTTPS_PROXY" = "y" ] && [ -z "$LETSENCRYPT_EMAIL" ]; then
+            echo "Error: --letsencrypt-email is required when --https-proxy=y"
+            show_usage
+            exit 1
+        fi
+
+        if [ "$REMOVE_OLD_RECORDING" = "y" ] && [ -z "$RECORDING_MAX_AGE_DAYS" ]; then
+            echo "Error: --recording-max-age-days is required when --remove-old-recording=y"
+            show_usage
+            exit 1
+        fi
+    fi
+}
+
+# Interactive mode or fill missing values
+if [ "$INTERACTIVE_MODE" = true ] || [ -z "$GREENLIGHT" ]; then
+    if [ "$INTERACTIVE_MODE" = true ]; then
+        greenlight=""
+        while [[ ! $greenlight =~ ^(y|n)$ ]]; do
+            read -p "Should greenlight be included? (y/n): " greenlight
+        done
+        GREENLIGHT="$greenlight"
+    else
+        GREENLIGHT="${GREENLIGHT:-n}"
+    fi
+fi
+
+if [ "$INTERACTIVE_MODE" = true ] || [ -z "$HTTPS_PROXY" ]; then
+    if [ "$INTERACTIVE_MODE" = true ]; then
+        https_proxy=""
+        while [[ ! $https_proxy =~ ^(y|n)$ ]]; do
+            read -p "Should an automatic HTTPS Proxy be included? (y/n): " https_proxy
+        done
+        HTTPS_PROXY="$https_proxy"
+    else
+        HTTPS_PROXY="${HTTPS_PROXY:-n}"
+    fi
+fi
+
+if [ "$HTTPS_PROXY" == "y" ] && ([ "$INTERACTIVE_MODE" = true ] || [ -z "$LETSENCRYPT_EMAIL" ]); then
+    if [ "$INTERACTIVE_MODE" = true ]; then
+        while [[ ! $LETSENCRYPT_EMAIL =~ ^.+@.+\..+$ ]]; do
+            read -p "Please enter an Email adress for the Let's Encrypt notifications: " LETSENCRYPT_EMAIL
+        done
+    fi
+fi
+
+if [ "$INTERACTIVE_MODE" = true ] || [ -z "$DOMAIN" ]; then
+    if [ "$INTERACTIVE_MODE" = true ]; then
+        while [[ -z "$DOMAIN" ]]; do
+            read -p "Please enter the domain name: " DOMAIN
+        done
+    fi
+fi
+
+if [ "$INTERACTIVE_MODE" = true ] || [ -z "$RECORDING" ]; then
+    if [ "$INTERACTIVE_MODE" = true ]; then
+        recording=""
+        echo "Should the recording feature be included?"
+        echo "   IMPORTANT: this is currently a big privacy issues, because it will "
+        echo "   record everything which happens in the conference, even when the button"
+        echo "   suggests, that it does not."
+        echo "   make sure that you always get people's consent, before they join a room!"
+        echo "   https://github.com/bigbluebutton/bigbluebutton/issues/9202"
+        while [[ ! $recording =~ ^(y|n)$ ]]; do
+            read -p "Choice (y/n): " recording
+        done
+        RECORDING="$recording"
+    else
+        RECORDING="${RECORDING:-n}"
+    fi
+fi
+
+if [ "$INTERACTIVE_MODE" = true ] || [ -z "$PROMETHEUS_EXPORTER" ]; then
+    if [ "$INTERACTIVE_MODE" = true ]; then
+        prometheus_exporter=""
+        while [[ ! $prometheus_exporter =~ ^(y|n)$ ]]; do
+            read -p "Should a Prometheus exporter be included? (y/n): " prometheus_exporter
+        done
+        PROMETHEUS_EXPORTER="$prometheus_exporter"
+    else
+        PROMETHEUS_EXPORTER="${PROMETHEUS_EXPORTER:-n}"
+    fi
+fi
+
+if [ "$PROMETHEUS_EXPORTER" == "y" ] && [ "$RECORDING" == "y" ] && ([ "$INTERACTIVE_MODE" = true ] || [ -z "$PROMETHEUS_EXPORTER_OPTIMIZATION" ]); then
+    if [ "$INTERACTIVE_MODE" = true ]; then
+        echo "Should Prometheus exporter optimization be enabled?"
+        echo "  This instructs exporter to collect expensive recordings metrics by querying the disk instead of the API."
+        echo "  Enabling this can substantially decrease the scrape time required for the exporter to respond to metrics requests"
+        prometheus_exporter_optimization=""
+        while [[ ! $prometheus_exporter_optimization =~ ^(y|n)$ ]]; do
+            read -p "Choice (y/n): " prometheus_exporter_optimization
+        done
+        PROMETHEUS_EXPORTER_OPTIMIZATION="$prometheus_exporter_optimization"
+    else
+        PROMETHEUS_EXPORTER_OPTIMIZATION="${PROMETHEUS_EXPORTER_OPTIMIZATION:-n}"
+    fi
+fi
+
+if [ "$RECORDING" == "y" ]; then
+    if [ "$INTERACTIVE_MODE" = true ] || [ -z "$REMOVE_OLD_RECORDING" ]; then
+        if [ "$INTERACTIVE_MODE" = true ]; then
+            remove_old_recording=""
+            while [[ ! $remove_old_recording =~ ^(y|n)$ ]]; do
+                read -p "Should old recordings be removed? (y/n): " remove_old_recording
+            done
+            REMOVE_OLD_RECORDING="$remove_old_recording"
+        else
+            REMOVE_OLD_RECORDING="${REMOVE_OLD_RECORDING:-n}"
+        fi
+    fi
+
+    if [ "$REMOVE_OLD_RECORDING" == "y" ] && ([ "$INTERACTIVE_MODE" = true ] || [ -z "$RECORDING_MAX_AGE_DAYS" ]); then
+        if [ "$INTERACTIVE_MODE" = true ]; then
+            recording_max_age_days=""
+            while [[ ! $recording_max_age_days =~ ^[0-9]{1,4}$ ]]; do
+                read -p "Please enter max age(days) for keeping recordings: " recording_max_age_days
+            done
+            RECORDING_MAX_AGE_DAYS="$recording_max_age_days"
+        fi
+    fi
+fi
+
+# IP validation (only in interactive mode or if not provided via arguments)
+if [ "$INTERACTIVE_MODE" = true ] && [ -z "$EXTERNAL_IPv4_ARG" ]; then
+    ip_correct=""
+    while [[ ! $ip_correct =~ ^(y|n)$ ]]; do
+        read -p "Is $EXTERNAL_IPv4 your external IPv4 address? (y/n): " ip_correct
+    done
+
+    if [ ! "$ip_correct" == "y" ]; then
+        EXTERNAL_IPv4=""
+        while [[ ! $EXTERNAL_IPv4 =~ ^[1-9][0-9]{0,2}\.[0-9]{0,3}\.[0-9]{0,3}\.[1-9][0-9]{0,2}$ ]]; do
+            read -p "Please enter correct IPv4 address: " EXTERNAL_IPv4
+        done
+    fi
+fi
+
+if [ -n "$EXTERNAL_IPv6" ] && [ "$INTERACTIVE_MODE" = true ] && [ -z "$EXTERNAL_IPv6_ARG" ]; then
+    ip_correct=""
+    while [[ ! $ip_correct =~ ^(y|n)$ ]]; do
+        read -p "Is $EXTERNAL_IPv6 your external IPv6 address? (y/n): " ip_correct
+    done
+
+    if [ ! "$ip_correct" == "y" ]; then
+        EXTERNAL_IPv6=""
+        while [[ ! $EXTERNAL_IPv6 =~ ^[0-9a-z:]{3,39}$ ]]; do
+            read -p "Please enter correct IPv6 address: " EXTERNAL_IPv6
+        done
+    fi
+fi
+
+# Validate inputs
+validate_inputs
+
+
+
+# write settings
+cp sample.env .env
+sed -i "s/EXTERNAL_IPv4=.*/EXTERNAL_IPv4=$EXTERNAL_IPv4/" .env
+sed -i "s/EXTERNAL_IPv6=.*/EXTERNAL_IPv6=$EXTERNAL_IPv6/" .env
+sed -i "s/DOMAIN=.*/DOMAIN=$DOMAIN/" .env
+sed -i "s/.*STUN_IP=.*/STUN_IP=$EXTERNAL_IPv4/" .env
+
+if [ ! "$GREENLIGHT" == "y" ]
+then
+    sed -i "s/ENABLE_GREENLIGHT.*/#ENABLE_GREENLIGHT=true/" .env
+fi
+
+if [ ! "$HTTPS_PROXY" == "y" ]
+then
+    sed -i "s/ENABLE_HTTPS_PROXY.*/#ENABLE_HTTPS_PROXY=true/" .env
+fi
+
+sed -i "s/LETSENCRYPT_EMAIL=.*/LETSENCRYPT_EMAIL=$LETSENCRYPT_EMAIL/" .env
+
+
+if [ "$RECORDING" == "y" ]
+then
+    sed -i "s/#ENABLE_RECORDING.*/ENABLE_RECORDING=true/" .env
+fi
+
+if [ "$REMOVE_OLD_RECORDING" == "y" ]
+then
+    sed -i "s/#REMOVE_OLD_RECORDING=.*/REMOVE_OLD_RECORDING=true/" .env
+    sed -i "s/#RECORDING_MAX_AGE_DAYS=.*/RECORDING_MAX_AGE_DAYS=$RECORDING_MAX_AGE_DAYS/" .env
+fi
+
+
+if [ "$PROMETHEUS_EXPORTER" == "y" ]
+then
+    sed -i "s/#ENABLE_PROMETHEUS_EXPORTER=.*/ENABLE_PROMETHEUS_EXPORTER=true/" .env
+fi
+
+if [ "$PROMETHEUS_EXPORTER_OPTIMIZATION" == "y" ]
+then
+    sed -i "s/#ENABLE_PROMETHEUS_EXPORTER_OPTIMIZATION=.*/ENABLE_PROMETHEUS_EXPORTER_OPTIMIZATION=true/" .env
+fi
+
+# change secrets
+RANDOM_1=$(head /dev/urandom | tr -dc A-Za-z0-9 | head -c 40)
+RANDOM_2=$(head /dev/urandom | tr -dc A-Za-z0-9 | head -c 40)
+RANDOM_3=$(head /dev/urandom | tr -dc a-f0-9 | head -c 128)
+RANDOM_4=$(head /dev/urandom | tr -dc A-Za-z0-9 | head -c 40)
+RANDOM_5=$(head /dev/urandom | tr -dc A-Za-z0-9 | head -c 40)
+TURN_SECRET=$(head /dev/urandom | tr -dc A-Za-f0-9 | head -c 32)
+
+
+sed -i "s/SHARED_SECRET=.*/SHARED_SECRET=$RANDOM_1/" .env
+sed -i "s/ETHERPAD_API_KEY=.*/ETHERPAD_API_KEY=$RANDOM_2/" .env
+sed -i "s/RAILS_SECRET=.*/RAILS_SECRET=$RANDOM_3/" .env
+sed -i "s/FSESL_PASSWORD=.*/FSESL_PASSWORD=$RANDOM_4/" .env
+sed -i "s/POSTGRESQL_SECRET=.*/POSTGRESQL_SECRET=$RANDOM_5/" .env
+sed -i "s/.*TURN_SECRET=.*/TURN_SECRET=$TURN_SECRET/" .env
+
+
+./scripts/generate-compose
+
+echo "--------------------------------------------------"
+echo "configuration file .env got successfully created!"
+echo ""
+echo "Configuration summary:"
+echo "  Domain: $DOMAIN"
+echo "  Greenlight: $GREENLIGHT"
+echo "  HTTPS Proxy: $HTTPS_PROXY"
+echo "  Recording: $RECORDING"
+echo "  Prometheus Exporter: $PROMETHEUS_EXPORTER"
+echo "  External IPv4: $EXTERNAL_IPv4"
+if [ -n "$EXTERNAL_IPv6" ]; then
+    echo "  External IPv6: $EXTERNAL_IPv6"
+fi
+echo ""
+echo "you can look through it for further adjusments"
+echo "  $ nano .env"
+echo ""
+echo "make sure to recreate the docker-compose.yml after each change"
+echo "  $ ./scripts/generate-compose"
+echo ""
+echo "to start bigbluebutton run"
+echo "  $ docker compose up -d"
