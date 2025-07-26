@@ -20,12 +20,13 @@ show_usage() {
     echo "  --external-ipv4 IP                External IPv4 address (auto-detected if not provided)"
     echo "  --external-ipv6 IP                External IPv6 address (auto-detected if not provided)"
     echo "  --override-secrets [y|n]          Override existing secrets with new random values (default: y)"
+    echo "  --bbb-secret SECRET               Custom BigBlueButton shared secret (overrides random generation)"
     echo "  --force                           Overwrite existing .env file if it exists"
     echo "  --interactive                     Run in interactive mode (ignore other options)"
     echo "  --help                            Show this help message"
     echo ""
     echo "Example:"
-    echo "  $0 --domain example.com --greenlight y --https-proxy y --letsencrypt-email admin@example.com --override-secrets y"
+    echo "  $0 --domain example.com --greenlight y --https-proxy y --letsencrypt-email admin@example.com --bbb-secret myCustomSecret123"
 }
 
 # Parse command line arguments
@@ -43,6 +44,7 @@ PROMETHEUS_EXPORTER_OPTIMIZATION=""
 EXTERNAL_IPv4_ARG=""
 EXTERNAL_IPv6_ARG=""
 OVERRIDE_SECRETS=""
+BBB_SECRET=""
 
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -92,6 +94,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --override-secrets)
             OVERRIDE_SECRETS="$2"
+            shift 2
+            ;;
+        --bbb-secret)
+            BBB_SECRET="$2"
             shift 2
             ;;
         --force)
@@ -387,17 +393,43 @@ if [ "$INTERACTIVE_MODE" = true ] || [ -z "$OVERRIDE_SECRETS" ]; then
     fi
 fi
 
-# change secrets (only if override is enabled)
+# Handle custom BBB secret in interactive mode (independent of override-secrets)
+if [ "$INTERACTIVE_MODE" = true ] && [ -z "$BBB_SECRET" ]; then
+    custom_secret=""
+    while [[ ! $custom_secret =~ ^(y|n)$ ]]; do
+        read -p "Do you want to provide a custom BigBlueButton shared secret? (y/n): " custom_secret
+    done
+    if [ "$custom_secret" = "y" ]; then
+        while [[ -z "$BBB_SECRET" ]]; do
+            read -p "Please enter the custom BBB shared secret: " BBB_SECRET
+        done
+    fi
+fi
+
+# Handle BBB secret (independent of override-secrets)
+if [ -n "$BBB_SECRET" ]; then
+    echo "Setting custom BigBlueButton shared secret"
+    sed -i "s/SHARED_SECRET=.*/SHARED_SECRET=$BBB_SECRET/" .env
+fi
+
+# Handle other secrets (only if override is enabled)
 if [ "$OVERRIDE_SECRETS" == "y" ]; then
     echo "Generating new random secrets..."
-    RANDOM_1=$(head /dev/urandom | tr -dc A-Za-z0-9 | head -c 40)
+
+    # Generate SHARED_SECRET only if custom BBB secret is not provided
+    if [ -z "$BBB_SECRET" ]; then
+        echo "Generating random BigBlueButton shared secret"
+        RANDOM_1=$(head /dev/urandom | tr -dc A-Za-z0-9 | head -c 40)
+        sed -i "s/SHARED_SECRET=.*/SHARED_SECRET=$RANDOM_1/" .env
+    fi
+
+    # Generate other random secrets
     RANDOM_2=$(head /dev/urandom | tr -dc A-Za-z0-9 | head -c 40)
     RANDOM_3=$(head /dev/urandom | tr -dc a-f0-9 | head -c 128)
     RANDOM_4=$(head /dev/urandom | tr -dc A-Za-z0-9 | head -c 40)
     RANDOM_5=$(head /dev/urandom | tr -dc A-Za-z0-9 | head -c 40)
     TURN_SECRET=$(head /dev/urandom | tr -dc A-Za-f0-9 | head -c 32)
 
-    sed -i "s/SHARED_SECRET=.*/SHARED_SECRET=$RANDOM_1/" .env
     sed -i "s/ETHERPAD_API_KEY=.*/ETHERPAD_API_KEY=$RANDOM_2/" .env
     sed -i "s/RAILS_SECRET=.*/RAILS_SECRET=$RANDOM_3/" .env
     sed -i "s/FSESL_PASSWORD=.*/FSESL_PASSWORD=$RANDOM_4/" .env
@@ -420,6 +452,11 @@ echo "  HTTPS Proxy: $HTTPS_PROXY"
 echo "  Recording: $RECORDING"
 echo "  Prometheus Exporter: $PROMETHEUS_EXPORTER"
 echo "  Override Secrets: $OVERRIDE_SECRETS"
+if [ -n "$BBB_SECRET" ]; then
+    echo "  Custom BBB Secret: Yes (provided)"
+else
+    echo "  Custom BBB Secret: No (random generated)"
+fi
 echo "  External IPv4: $EXTERNAL_IPv4"
 if [ -n "$EXTERNAL_IPv6" ]; then
     echo "  External IPv6: $EXTERNAL_IPv6"
