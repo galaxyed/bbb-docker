@@ -42,7 +42,7 @@ Version: 3.0.4 | [Changelog](CHANGELOG.md) | [Issues](https://github.com/bigblue
 3. Clone this repository
 
    ```sh
-   $ git clone https://github.com/bigbluebutton/docker.git bbb-docker
+   $ git clone https://github.com/galaxyed/bbb-docker.git bbb-docker
    $ cd bbb-docker
 
    # optional: use the more stable ge-main branch (often much older)
