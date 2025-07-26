@@ -19,12 +19,13 @@ show_usage() {
     echo "  --prometheus-optimization [y|n]   Enable Prometheus optimization (default: n, only if prometheus-exporter=y)"
     echo "  --external-ipv4 IP                External IPv4 address (auto-detected if not provided)"
     echo "  --external-ipv6 IP                External IPv6 address (auto-detected if not provided)"
+    echo "  --override-secrets [y|n]          Override existing secrets with new random values (default: y)"
     echo "  --force                           Overwrite existing .env file if it exists"
     echo "  --interactive                     Run in interactive mode (ignore other options)"
     echo "  --help                            Show this help message"
     echo ""
     echo "Example:"
-    echo "  $0 --domain example.com --greenlight y --https-proxy y --letsencrypt-email admin@example.com"
+    echo "  $0 --domain example.com --greenlight y --https-proxy y --letsencrypt-email admin@example.com --override-secrets y"
 }
 
 # Parse command line arguments
@@ -41,6 +42,7 @@ PROMETHEUS_EXPORTER=""
 PROMETHEUS_EXPORTER_OPTIMIZATION=""
 EXTERNAL_IPv4_ARG=""
 EXTERNAL_IPv6_ARG=""
+OVERRIDE_SECRETS=""
 
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -86,6 +88,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --external-ipv6)
             EXTERNAL_IPv6_ARG="$2"
+            shift 2
+            ;;
+        --override-secrets)
+            OVERRIDE_SECRETS="$2"
             shift 2
             ;;
         --force)
@@ -364,21 +370,42 @@ then
     sed -i "s/#ENABLE_PROMETHEUS_EXPORTER_OPTIMIZATION=.*/ENABLE_PROMETHEUS_EXPORTER_OPTIMIZATION=true/" .env
 fi
 
-# change secrets
-RANDOM_1=$(head /dev/urandom | tr -dc A-Za-z0-9 | head -c 40)
-RANDOM_2=$(head /dev/urandom | tr -dc A-Za-z0-9 | head -c 40)
-RANDOM_3=$(head /dev/urandom | tr -dc a-f0-9 | head -c 128)
-RANDOM_4=$(head /dev/urandom | tr -dc A-Za-z0-9 | head -c 40)
-RANDOM_5=$(head /dev/urandom | tr -dc A-Za-z0-9 | head -c 40)
-TURN_SECRET=$(head /dev/urandom | tr -dc A-Za-f0-9 | head -c 32)
+# Handle override secrets option
+if [ "$INTERACTIVE_MODE" = true ] || [ -z "$OVERRIDE_SECRETS" ]; then
+    if [ "$INTERACTIVE_MODE" = true ]; then
+        override_secrets=""
+        echo "Should existing secrets be overridden with new random values?"
+        echo "  This will generate new random values for SHARED_SECRET, ETHERPAD_API_KEY, RAILS_SECRET,"
+        echo "  FSESL_PASSWORD, POSTGRESQL_SECRET, and TURN_SECRET."
+        echo "  Choose 'n' if you want to keep existing values in the .env file."
+        while [[ ! $override_secrets =~ ^(y|n)$ ]]; do
+            read -p "Override secrets? (y/n): " override_secrets
+        done
+        OVERRIDE_SECRETS="$override_secrets"
+    else
+        OVERRIDE_SECRETS="${OVERRIDE_SECRETS:-y}"
+    fi
+fi
 
+# change secrets (only if override is enabled)
+if [ "$OVERRIDE_SECRETS" == "y" ]; then
+    echo "Generating new random secrets..."
+    RANDOM_1=$(head /dev/urandom | tr -dc A-Za-z0-9 | head -c 40)
+    RANDOM_2=$(head /dev/urandom | tr -dc A-Za-z0-9 | head -c 40)
+    RANDOM_3=$(head /dev/urandom | tr -dc a-f0-9 | head -c 128)
+    RANDOM_4=$(head /dev/urandom | tr -dc A-Za-z0-9 | head -c 40)
+    RANDOM_5=$(head /dev/urandom | tr -dc A-Za-z0-9 | head -c 40)
+    TURN_SECRET=$(head /dev/urandom | tr -dc A-Za-f0-9 | head -c 32)
 
-sed -i "s/SHARED_SECRET=.*/SHARED_SECRET=$RANDOM_1/" .env
-sed -i "s/ETHERPAD_API_KEY=.*/ETHERPAD_API_KEY=$RANDOM_2/" .env
-sed -i "s/RAILS_SECRET=.*/RAILS_SECRET=$RANDOM_3/" .env
-sed -i "s/FSESL_PASSWORD=.*/FSESL_PASSWORD=$RANDOM_4/" .env
-sed -i "s/POSTGRESQL_SECRET=.*/POSTGRESQL_SECRET=$RANDOM_5/" .env
-sed -i "s/.*TURN_SECRET=.*/TURN_SECRET=$TURN_SECRET/" .env
+    sed -i "s/SHARED_SECRET=.*/SHARED_SECRET=$RANDOM_1/" .env
+    sed -i "s/ETHERPAD_API_KEY=.*/ETHERPAD_API_KEY=$RANDOM_2/" .env
+    sed -i "s/RAILS_SECRET=.*/RAILS_SECRET=$RANDOM_3/" .env
+    sed -i "s/FSESL_PASSWORD=.*/FSESL_PASSWORD=$RANDOM_4/" .env
+    sed -i "s/POSTGRESQL_SECRET=.*/POSTGRESQL_SECRET=$RANDOM_5/" .env
+    sed -i "s/.*TURN_SECRET=.*/TURN_SECRET=$TURN_SECRET/" .env
+else
+    echo "Keeping existing secrets (override-secrets=n)"
+fi
 
 
 ./scripts/generate-compose
@@ -392,6 +419,7 @@ echo "  Greenlight: $GREENLIGHT"
 echo "  HTTPS Proxy: $HTTPS_PROXY"
 echo "  Recording: $RECORDING"
 echo "  Prometheus Exporter: $PROMETHEUS_EXPORTER"
+echo "  Override Secrets: $OVERRIDE_SECRETS"
 echo "  External IPv4: $EXTERNAL_IPv4"
 if [ -n "$EXTERNAL_IPv6" ]; then
     echo "  External IPv6: $EXTERNAL_IPv6"

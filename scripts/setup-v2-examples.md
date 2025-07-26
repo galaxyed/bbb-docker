@@ -39,6 +39,7 @@ hoặc
   --recording-max-age-days 30 \
   --prometheus-exporter y \
   --prometheus-optimization y \
+  --override-secrets y \
   --external-ipv4 192.168.1.100 \
   --external-ipv6 2001:db8::1
 ```
@@ -50,7 +51,8 @@ hoặc
   --domain myserver.com \
   --greenlight y \
   --https-proxy y \
-  --letsencrypt-email webmaster@myserver.com
+  --letsencrypt-email webmaster@myserver.com \
+  --override-secrets n
 ```
 
 #### Ví dụ ghi đè file .env hiện có:
@@ -60,6 +62,15 @@ hoặc
   --domain example.com \
   --greenlight y \
   --force
+```
+
+#### Ví dụ giữ nguyên secrets hiện có:
+
+```bash
+./scripts/setup-v2 \
+  --domain example.com \
+  --greenlight y \
+  --override-secrets n
 ```
 
 ## Tham số có sẵn
@@ -75,6 +86,7 @@ hoặc
 | `--recording-max-age-days`  | Số ngày giữ recording    | số      | Có nếu remove-old-recording=y |
 | `--prometheus-exporter`     | Prometheus exporter      | y/n     | Không (mặc định: n)           |
 | `--prometheus-optimization` | Tối ưu Prometheus        | y/n     | Không (mặc định: n)           |
+| `--override-secrets`        | Ghi đè secrets hiện có   | y/n     | Không (mặc định: y)           |
 | `--external-ipv4`           | IP IPv4 external         | IP      | Không (tự động phát hiện)     |
 | `--external-ipv6`           | IP IPv6 external         | IP      | Không (tự động phát hiện)     |
 | `--force`                   | Ghi đè file .env hiện có | -       | Không                         |
@@ -87,13 +99,16 @@ hoặc
 2. **Tham số phụ thuộc**:
    - `--letsencrypt-email` bắt buộc khi `--https-proxy=y`
    - `--recording-max-age-days` bắt buộc khi `--remove-old-recording=y`
-3. **Giá trị mặc định**: Các tham số không được cung cấp sẽ có giá trị mặc định là "n"
-4. **IP tự động**: Nếu không cung cấp `--external-ipv4` hoặc `--external-ipv6`, script sẽ tự động phát hiện
-5. **Ghi đè file .env**:
+3. **Giá trị mặc định**: Các tham số không được cung cấp sẽ có giá trị mặc định là "n" (trừ `--override-secrets` mặc định là "y")
+4. **Override secrets**:
+   - `--override-secrets=y` (mặc định): Tạo mới các secrets ngẫu nhiên (SHARED_SECRET, ETHERPAD_API_KEY, RAILS_SECRET, FSESL_PASSWORD, POSTGRESQL_SECRET, TURN_SECRET)
+   - `--override-secrets=n`: Giữ nguyên các giá trị secrets hiện có trong file .env
+5. **IP tự động**: Nếu không cung cấp `--external-ipv4` hoặc `--external-ipv6`, script sẽ tự động phát hiện
+6. **Ghi đè file .env**:
    - Sử dụng `--force` để tự động ghi đè file .env hiện có
    - Trong interactive mode, script sẽ hỏi có muốn ghi đè không
    - Trong command line mode không có `--force`, script sẽ dừng nếu file .env đã tồn tại
-6. **Validation**: Script sẽ kiểm tra tính hợp lệ của các tham số và báo lỗi nếu thiếu thông tin bắt buộc
+7. **Validation**: Script sẽ kiểm tra tính hợp lệ của các tham số và báo lỗi nếu thiếu thông tin bắt buộc
 
 ## Ví dụ sử dụng trong CI/CD
 
@@ -105,7 +120,8 @@ hoặc
   --https-proxy $ENABLE_HTTPS \
   --letsencrypt-email $ADMIN_EMAIL \
   --recording $ENABLE_RECORDING \
-  --prometheus-exporter $ENABLE_MONITORING
+  --prometheus-exporter $ENABLE_MONITORING \
+  --override-secrets $OVERRIDE_SECRETS
 ```
 
 ## Troubleshooting
